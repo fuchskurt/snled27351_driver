@@ -1,0 +1,259 @@
+//! SNLED27351 driver core.
+//!
+//! [`Driver`] is generic over any [`Transport`] implementation, so the same
+//! register logic runs unchanged over both SPI and I2C. The transport owns
+//! the physical bus; the driver owns the transport and the PWM shadow buffers.
+
+use crate::{
+    registers::{
+        CURRENT_TUNE_REGISTER_COUNT,
+        LED_CONTROL_REGISTER_COUNT,
+        MSK_THERMAL_FLAG,
+        PAGE_CURRENT_TUNE,
+        PAGE_FUNCTION,
+        PAGE_LED_CONTROL,
+        PAGE_PWM,
+        PULLDOWNUP_ALL_ENABLED,
+        PWM_REGISTER_COUNT,
+        REG_PULLDOWNUP,
+        REG_SCAN_PHASE,
+        REG_SLEW_RATE_CONTROL_MODE_1,
+        REG_SLEW_RATE_CONTROL_MODE_2,
+        REG_SOFTWARE_SHUTDOWN,
+        REG_SOFTWARE_SLEEP,
+        REG_THERMAL,
+        SCAN_PHASE_12_CHANNEL,
+        SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE,
+        SLEW_RATE_CONTROL_MODE_2_ALL_ENABLE,
+        SOFTWARE_SHUTDOWN_SSD_NORMAL,
+        SOFTWARE_SHUTDOWN_SSD_SHUTDOWN,
+        SOFTWARE_SLEEP_DISABLE,
+    },
+    transport::Transport,
+};
+
+/// Mapping of a single RGB LED to its three PWM register addresses on one
+/// driver chip.
+#[derive(Copy, Clone)]
+pub struct Led {
+    /// Index of the driver chip controlling this LED.
+    pub driver: usize,
+    /// PWM register address for the red channel.
+    pub red: u8,
+    /// PWM register address for the green channel.
+    pub green: u8,
+    /// PWM register address for the blue channel.
+    pub blue: u8,
+}
+
+/// PWM shadow buffer and dirty flag for a single driver chip.
+struct DriverBuf {
+    /// Whether this driver's buffer has unsent changes.
+    dirty: bool,
+    /// PWM shadow buffer; index is the raw register address.
+    pwm: [u8; PWM_REGISTER_COUNT],
+}
+
+impl DriverBuf {
+    const fn new() -> Self { Self { dirty: false, pwm: [0_u8; PWM_REGISTER_COUNT] } }
+
+    /// Writes RGB values into the shadow buffer for one LED and marks dirty.
+    const fn stage(&mut self, led: Led, red: u8, green: u8, blue: u8) {
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.red)) {
+            *slot = red;
+        }
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.green)) {
+            *slot = green;
+        }
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.blue)) {
+            *slot = blue;
+        }
+        self.dirty = true;
+    }
+}
+
+/// SNLED27351 / CKLED2001 LED driver.
+///
+/// Generic over a [`Transport`] `T` so the same driver logic covers both
+/// SPI and I2C without any duplication. `N` is the number of driver chips;
+/// it must match [`Transport::driver_count`].
+///
+/// # Usage
+///
+/// ```ignore
+/// let transport = SpiTransport::new(devices, sdb_pin);
+/// let mut driver = Driver::new(transport, &LED_LAYOUT);
+/// driver.init(0xFF).await?;
+/// driver.set_all_leds(255, 255, 255).await?;
+/// ```
+pub struct Driver<T, const N: usize>
+where
+    T: Transport,
+{
+    /// PWM shadow buffers, one per chip.
+    bufs: [DriverBuf; N],
+    /// LED layout mapping logical indices to driver channels.
+    leds: &'static [Led],
+    /// The underlying bus transport.
+    transport: T,
+}
+
+impl<T, const N: usize> Driver<T, N>
+where
+    T: Transport,
+{
+    /// Creates a new driver from the given transport and LED layout.
+    ///
+    /// Call [`init`](Self::init) before writing any LED values.
+    pub const fn new(transport: T, leds: &'static [Led]) -> Self {
+        Self { transport, leds, bufs: [const { DriverBuf::new() }; N] }
+    }
+
+    /// Initializes all `N` driver chips.
+    ///
+    /// Performs the hardware reset sequence via the transport, then for each
+    /// chip: configures the function page registers, clears all LEDs and PWM
+    /// values, programs current tune, enables all channels, and releases
+    /// shutdown.
+    ///
+    /// `current_tune` sets the constant current step for all CB channels
+    /// (0xFF ≈ 40 mA at the default register scaling).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if any bus transaction fails during
+    /// initialization. The chip state is undefined if this occurs.
+    pub async fn init(&mut self, current_tune: u8) -> Result<(), T::Error> {
+        self.transport.reset().await?;
+
+        for i in 0..N {
+            // Enter shutdown so registers can be safely programmed.
+            self.transport
+                .write_page(i, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_SHUTDOWN])
+                .await?;
+
+            // Configure function registers.
+            self.transport.write_page(i, PAGE_FUNCTION, REG_PULLDOWNUP, &[PULLDOWNUP_ALL_ENABLED]).await?;
+            self.transport.write_page(i, PAGE_FUNCTION, REG_SCAN_PHASE, &[SCAN_PHASE_12_CHANNEL]).await?;
+            self.transport
+                .write_page(i, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, &[SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE])
+                .await?;
+            self.transport
+                .write_page(i, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, &[SLEW_RATE_CONTROL_MODE_2_ALL_ENABLE])
+                .await?;
+            self.transport.write_page(i, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, &[SOFTWARE_SLEEP_DISABLE]).await?;
+
+            // Clear LED control registers (all off).
+            self.transport.write_page(i, PAGE_LED_CONTROL, 0x00, &[0x00_u8; LED_CONTROL_REGISTER_COUNT]).await?;
+
+            // Zero all PWM registers and sync the shadow buffer.
+            self.transport.write_page(i, PAGE_PWM, 0x00, &[0x00_u8; PWM_REGISTER_COUNT]).await?;
+            if let Some(buf) = self.bufs.get_mut(i) {
+                buf.pwm.fill(0x00);
+                buf.dirty = false;
+            }
+
+            // Program current tune for all CB channels.
+            self.transport.write_page(i, PAGE_CURRENT_TUNE, 0x00, &[current_tune; CURRENT_TUNE_REGISTER_COUNT]).await?;
+
+            // Enable all LED channels.
+            self.transport.write_page(i, PAGE_LED_CONTROL, 0x00, &[0xFF_u8; LED_CONTROL_REGISTER_COUNT]).await?;
+
+            // Release shutdown — chip enters normal operating mode.
+            self.transport.write_page(i, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_NORMAL]).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Flushes all dirty PWM shadow buffers to hardware.
+    ///
+    /// Only drivers with pending changes are written, so calling this after
+    /// a no-op `stage_led` is free.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if a bus transaction fails while writing a
+    /// dirty buffer. Buffers that were successfully flushed before the error
+    /// are marked clean; the failed buffer remains dirty and will be retried
+    /// on the next call.
+    pub async fn flush(&mut self) -> Result<(), T::Error> {
+        for i in 0..N {
+            let dirty = self.bufs.get(i).is_some_and(|b| b.dirty);
+            if !dirty {
+                continue;
+            }
+            // Copy the 192-byte buffer to the stack to release the borrow on
+            // `self.bufs` before the async transport call.
+            let pwm = {
+                let Some(buf) = self.bufs.get(i) else { continue };
+                buf.pwm
+            };
+            self.transport.write_page(i, PAGE_PWM, 0x00, &pwm).await?;
+            if let Some(buf) = self.bufs.get_mut(i) {
+                buf.dirty = false;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the thermal detector flag (TDF) from driver chip `index`.
+    ///
+    /// Returns `true` if the chip reports temperature ≥ 70 °C.
+    /// Returns `false` if the index is out of range or the read fails.
+    pub async fn check_thermal_flag_set(&mut self, index: usize) -> bool {
+        self.transport.read_reg(index, PAGE_FUNCTION, REG_THERMAL).await.is_ok_and(|v| v & MSK_THERMAL_FLAG != 0)
+    }
+
+    /// Stages RGB values for one LED by layout index without flushing.
+    ///
+    /// Does nothing if `led_index` is out of bounds. Call
+    /// [`flush`](Self::flush) to transmit pending changes.
+    pub const fn stage_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
+        let Some(&led) = self.leds.get(led_index) else { return };
+        let Some(buf) = self.bufs.get_mut(led.driver) else { return };
+        buf.stage(led, red, green, blue);
+    }
+
+    /// Writes pre-corrected PWM values for a single LED and flushes
+    /// immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if the flush fails. See [`flush`](Self::flush).
+    pub async fn set_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) -> Result<(), T::Error> {
+        self.stage_led(led_index, red, green, blue);
+        self.flush().await
+    }
+
+    /// Stages RGB values for all LEDs in the layout without flushing.
+    pub fn stage_all_leds(&mut self, red: u8, green: u8, blue: u8) {
+        let leds: &'static [Led] = self.leds;
+        for &led in leds {
+            let Some(buf) = self.bufs.get_mut(led.driver) else { continue };
+            buf.stage(led, red, green, blue);
+        }
+    }
+
+    /// Writes pre-corrected PWM values for all LEDs and flushes immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if the flush fails. See [`flush`](Self::flush).
+    pub async fn set_all_leds(&mut self, red: u8, green: u8, blue: u8) -> Result<(), T::Error> {
+        self.stage_all_leds(red, green, blue);
+        self.flush().await
+    }
+
+    /// Updates the constant-current step for all CB channels on driver `index`.
+    ///
+    /// `value` maps to output current as `Iout = value × 0.157 mA` for
+    /// values 4–255. Values 1–3 produce ~0.47 mA; 0 disables current.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if the bus transaction fails.
+    pub async fn set_current_tune(&mut self, index: usize, value: u8) -> Result<(), T::Error> {
+        self.transport.write_page(index, PAGE_CURRENT_TUNE, 0x00, &[value; CURRENT_TUNE_REGISTER_COUNT]).await
+    }
+}

@@ -50,7 +50,7 @@ where
     type Error = I2cTransportError<B::Error>;
 
     /// I2C chips are reset via the software shutdown register in
-    /// [`Driver::init`]; no hardware pin toggle is needed here.
+    /// [`crate::driver::Driver::init`]; no hardware pin toggle is needed here.
     async fn reset(&mut self) -> Result<(), Self::Error> { Ok(()) }
 
     async fn write_page(&mut self, driver_index: usize, page: u8, reg: u8, data: &[u8]) -> Result<(), Self::Error> {

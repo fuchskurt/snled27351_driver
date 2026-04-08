@@ -1,9 +1,10 @@
 //! Async embedded-hal driver for the SNLED27351 / CKLED2001 matrix LED
 //! driver IC.
 //!
-//! Supports both SPI and I2C transports via a common [`Transport`] trait.
-//! The driver core in [`driver`] is generic over any [`Transport`]
-//! implementation so register logic is never duplicated between transports.
+//! Supports both SPI and I2C transports via a common [`transport::Transport`]
+//! trait. The driver core in [`driver`] is generic over any
+//! [`transport::Transport`] implementation and never duplicates register logic
+//! between transports.
 //!
 //! # Choosing a transport
 //!

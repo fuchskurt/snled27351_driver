@@ -1,9 +1,8 @@
-//! SNLED27351 driver core.
-//!
-//! [`Driver`] is generic over any [`Transport`] implementation, so the same
-//! register logic runs unchanged over both SPI and I2C. The transport owns
-//! the physical bus; the driver owns the transport and the PWM shadow buffers.
-
+/// SNLED27351 / CKLED2001 LED driver.
+///
+/// Generic over a [`Transport`] `T` so the same driver logic covers both
+/// SPI and I2C without any duplication. `N` is the number of driver chips
+/// and must match the number of devices managed by the transport.
 use crate::{
     registers::{
         CURRENT_TUNE_REGISTER_COUNT,
@@ -75,8 +74,8 @@ impl DriverBuf {
 /// SNLED27351 / CKLED2001 LED driver.
 ///
 /// Generic over a [`Transport`] `T` so the same driver logic covers both
-/// SPI and I2C without any duplication. `N` is the number of driver chips;
-/// it must match [`Transport::driver_count`].
+/// SPI and I2C without any duplication. `N` is the number of driver chips
+/// and must match the number of devices managed by the transport.
 ///
 /// # Usage
 ///

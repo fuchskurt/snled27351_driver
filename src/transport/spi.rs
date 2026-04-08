@@ -52,7 +52,7 @@ where
     /// Creates a new [`SpiTransport`].
     ///
     /// `cs` must be in the same order as the driver indices used by
-    /// [`Driver`](crate::driver::Driver). All CS pins are initialised high
+    /// [`crate::driver::Driver`]. All CS pins are initialized high
     /// (deasserted) on construction.
     pub const fn new(bus: B, cs: [C; N], sdb: S) -> Self { Self { bus, cs, sdb } }
 }

@@ -1,8 +1,8 @@
 [package]
-name = "snled27351"
+name = "snled27351_driver"
 version = "0.1.0"
-description = "Async embedded-hal driver for the SNLED27351 / CKLED2001 matrix LED driver IC, supporting SPI and I2C transports"
-repository = "https://github.com/fuchskurt/snled27351"
+description = "Async embedded-hal driver for the SNLED27351 matrix LED driver IC, supporting SPI and I2C transports"
+repository = "https://github.com/fuchskurt/snled27351_driver"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 

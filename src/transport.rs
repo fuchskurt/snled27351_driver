@@ -10,11 +10,11 @@
 //! - [`I2cTransport`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus and
 //!   N 7-bit device addresses.
 
-pub mod i2c;
-pub mod spi;
-
-pub use i2c::I2cTransport;
-pub use spi::SpiTransport;
+use core::fmt::Debug;
+#[cfg(feature = "i2c")] pub mod i2c;
+#[cfg(feature = "spi")] pub mod spi;
+#[cfg(feature = "i2c")] pub use i2c::I2cTransport;
+#[cfg(feature = "spi")] pub use spi::SpiTransport;
 
 /// Abstraction over the physical bus used to communicate with one or more
 /// SNLED27351 driver chips.
@@ -32,7 +32,7 @@ pub use spi::SpiTransport;
 /// [`read_reg`](Transport::read_reg) with a plain page number.
 pub trait Transport {
     /// The error type returned by bus operations.
-    type Error: core::fmt::Debug;
+    type Error: Debug;
 
     /// Performs the hardware reset sequence.
     ///

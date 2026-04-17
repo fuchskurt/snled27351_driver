@@ -1,4 +1,4 @@
-/// SNLED27351 / CKLED2001 LED driver.
+/// SNLED27351 LED driver.
 ///
 /// Generic over a [`Transport`] `T` so the same driver logic covers both
 /// SPI and I2C without any duplication. `N` is the number of driver chips
@@ -34,15 +34,16 @@ use crate::{
 /// Mapping of a single RGB LED to its three PWM register addresses on one
 /// driver chip.
 #[derive(Copy, Clone)]
+#[non_exhaustive]
 pub struct Led {
-    /// Index of the driver chip controlling this LED.
-    pub driver: usize,
-    /// PWM register address for the red channel.
-    pub red: u8,
-    /// PWM register address for the green channel.
-    pub green: u8,
     /// PWM register address for the blue channel.
     pub blue: u8,
+    /// Index of the driver chip controlling this LED.
+    pub driver: usize,
+    /// PWM register address for the green channel.
+    pub green: u8,
+    /// PWM register address for the red channel.
+    pub red: u8,
 }
 
 /// PWM shadow buffer and dirty flag for a single driver chip.
@@ -71,7 +72,7 @@ impl DriverBuf {
     }
 }
 
-/// SNLED27351 / CKLED2001 LED driver.
+/// SNLED27351 LED driver.
 ///
 /// Generic over a [`Transport`] `T` so the same driver logic covers both
 /// SPI and I2C without any duplication. `N` is the number of driver chips
@@ -104,6 +105,7 @@ where
     /// Creates a new driver from the given transport and LED layout.
     ///
     /// Call [`init`](Self::init) before writing any LED values.
+    #[inline]
     pub const fn new(transport: T, leds: &'static [Led]) -> Self {
         Self { transport, leds, bufs: [const { DriverBuf::new() }; N] }
     }
@@ -122,6 +124,7 @@ where
     ///
     /// Returns `Err(T::Error)` if any bus transaction fails during
     /// initialization. The chip state is undefined if this occurs.
+    #[inline]
     pub async fn init(&mut self, current_tune: u8) -> Result<(), T::Error> {
         self.transport.reset().await?;
 
@@ -176,6 +179,7 @@ where
     /// dirty buffer. Buffers that were successfully flushed before the error
     /// are marked clean; the failed buffer remains dirty and will be retried
     /// on the next call.
+    #[inline]
     pub async fn flush(&mut self) -> Result<(), T::Error> {
         for i in 0..N {
             let dirty = self.bufs.get(i).is_some_and(|b| b.dirty);
@@ -200,6 +204,7 @@ where
     ///
     /// Returns `true` if the chip reports temperature ≥ 70 °C.
     /// Returns `false` if the index is out of range or the read fails.
+    #[inline]
     pub async fn check_thermal_flag_set(&mut self, index: usize) -> bool {
         self.transport.read_reg(index, PAGE_FUNCTION, REG_THERMAL).await.is_ok_and(|v| v & MSK_THERMAL_FLAG != 0)
     }
@@ -208,6 +213,7 @@ where
     ///
     /// Does nothing if `led_index` is out of bounds. Call
     /// [`flush`](Self::flush) to transmit pending changes.
+    #[inline]
     pub const fn stage_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
         let Some(&led) = self.leds.get(led_index) else { return };
         let Some(buf) = self.bufs.get_mut(led.driver) else { return };
@@ -220,12 +226,14 @@ where
     /// # Errors
     ///
     /// Returns `Err(T::Error)` if the flush fails. See [`flush`](Self::flush).
+    #[inline]
     pub async fn set_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) -> Result<(), T::Error> {
         self.stage_led(led_index, red, green, blue);
         self.flush().await
     }
 
     /// Stages RGB values for all LEDs in the layout without flushing.
+    #[inline]
     pub fn stage_all_leds(&mut self, red: u8, green: u8, blue: u8) {
         let leds: &'static [Led] = self.leds;
         for &led in leds {
@@ -239,6 +247,7 @@ where
     /// # Errors
     ///
     /// Returns `Err(T::Error)` if the flush fails. See [`flush`](Self::flush).
+    #[inline]
     pub async fn set_all_leds(&mut self, red: u8, green: u8, blue: u8) -> Result<(), T::Error> {
         self.stage_all_leds(red, green, blue);
         self.flush().await
@@ -252,6 +261,7 @@ where
     /// # Errors
     ///
     /// Returns `Err(T::Error)` if the bus transaction fails.
+    #[inline]
     pub async fn set_current_tune(&mut self, index: usize, value: u8) -> Result<(), T::Error> {
         self.transport.write_page(index, PAGE_CURRENT_TUNE, 0x00, &[value; CURRENT_TUNE_REGISTER_COUNT]).await
     }

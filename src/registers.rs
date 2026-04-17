@@ -75,7 +75,7 @@ pub const MSK_THERMAL_FLAG: u8 = 0x01;
 
 /// Pull-down / pull-up resistor configuration register.
 ///
-/// Bit layout: \[CAPD, -, CAPD2, -, CBPU, -, CBPU2, -\]
+/// Bit layout: \[CAPD, -, CAPD2, -, CBPU, -, CBPU2, -\].
 pub const REG_PULLDOWNUP: u8 = 0x13;
 /// All four PDU control bits enabled (0xAA = datasheet recommended value).
 pub const PULLDOWNUP_ALL_ENABLED: u8 = 0xAA;

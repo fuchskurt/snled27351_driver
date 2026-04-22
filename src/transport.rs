@@ -5,17 +5,15 @@
 //! the same register logic to run over both SPI and I2C without duplication.
 //! Select the appropriate transport for your hardware:
 //!
-//! - [`SpiTransport`] — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus), N
-//!   CS [`OutputPin`](embedded_hal::digital::OutputPin)s, and one SDB pin.
-//! - [`I2cTransport`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus and
-//!   N 7-bit device addresses.
-
-use core::fmt::Debug;
+//! - [`Controller`] — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus), N CS
+//!   [`OutputPin`](embedded_hal::digital::OutputPin)s, and one SDB pin.
+//! - [`Controller`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus and N
+//!   7-bit device addresses.
 #[cfg(feature = "i2c")] pub mod i2c;
 #[cfg(feature = "spi")] pub mod spi;
-#[cfg(feature = "i2c")] pub use i2c::I2cTransport;
-#[cfg(feature = "spi")] pub use spi::SpiTransport;
-
+use core::fmt::Debug;
+#[cfg(feature = "i2c")] pub use i2c::Controller;
+#[cfg(feature = "spi")] pub use spi::Controller;
 /// Abstraction over the physical bus used to communicate with one or more
 /// SNLED27351 driver chips.
 ///
@@ -33,6 +31,14 @@ use core::fmt::Debug;
 pub trait Transport {
     /// The error type returned by bus operations.
     type Error: Debug;
+
+    /// Selects `page` on chip `driver_index`, then reads and returns the
+    /// single byte at register `reg`.
+    #[expect(
+        async_fn_in_trait,
+        reason = "This crate targets single-core Cortex-M; Send bounds on futures are unnecessary"
+    )]
+    async fn read_reg(&mut self, driver_index: usize, page: u8, reg: u8) -> Result<u8, Self::Error>;
 
     /// Performs the hardware reset sequence.
     ///
@@ -55,12 +61,4 @@ pub trait Transport {
         reason = "This crate targets single-core Cortex-M; Send bounds on futures are unnecessary"
     )]
     async fn write_page(&mut self, driver_index: usize, page: u8, reg: u8, data: &[u8]) -> Result<(), Self::Error>;
-
-    /// Selects `page` on chip `driver_index`, then reads and returns the
-    /// single byte at register `reg`.
-    #[expect(
-        async_fn_in_trait,
-        reason = "This crate targets single-core Cortex-M; Send bounds on futures are unnecessary"
-    )]
-    async fn read_reg(&mut self, driver_index: usize, page: u8, reg: u8) -> Result<u8, Self::Error>;
 }

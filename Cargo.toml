@@ -22,18 +22,10 @@ embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = "deny"
-pedantic = "deny"
-restriction = "deny"
-nursery = "deny"
-blanket_clippy_restriction_lints = "allow"
-future_not_send = "allow"
-implicit_return = "allow"
-separated_literal_suffix = "allow"
-single_call_fn = "allow"
-self_named_module_files = "allow"
-pub_with_shorthand = "allow"
-pub_use = "allow"
+all = { level = "deny", priority = 1 }
+pedantic = { level = "deny", priority = 1 }
+restriction = { level = "deny", priority = 1 }
+nursery = { level = "deny", priority = 1 }
 
 [lints]
 workspace = true

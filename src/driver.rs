@@ -37,13 +37,58 @@ use crate::{
 #[non_exhaustive]
 pub struct Led {
     /// PWM register address for the blue channel.
-    pub blue:   u8,
+    blue:   u8,
     /// Index of the driver chip controlling this LED.
-    pub driver: usize,
+    driver: usize,
     /// PWM register address for the green channel.
-    pub green:  u8,
+    green:  u8,
     /// PWM register address for the red channel.
-    pub red:    u8,
+    red:    u8,
+}
+
+impl Led {
+    /// Returns the PWM register address for the blue channel.
+    #[inline]
+    #[must_use]
+    pub const fn blue(self) -> u8 { self.blue }
+
+    /// Returns the index of the driver chip controlling this LED.
+    ///
+    /// The index corresponds to the position in the transport's device array
+    /// (e.g. the `addrs` slice for I2C or the `devices` array for SPI).
+    #[inline]
+    #[must_use]
+    pub const fn driver(self) -> usize { self.driver }
+
+    /// Returns the PWM register address for the green channel.
+    #[inline]
+    #[must_use]
+    pub const fn green(self) -> u8 { self.green }
+
+    /// Creates a new [`Led`] with the given driver index and channel register
+    /// addresses.
+    ///
+    /// `driver` is the zero-based index of the chip that controls this LED,
+    /// matching the order of devices passed to the transport constructor.
+    /// `red`, `green`, and `blue` are the raw PWM register addresses on that
+    /// chip, as defined by the `CB*_CA*` constants in the register map.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use snled27351_driver::driver::Led;
+    /// use snled27351_driver::registers::{CB1_CA1, CB2_CA1, CB3_CA1};
+    ///
+    /// const MY_LED: Led = Led::new(0, CB1_CA1, CB3_CA1, CB2_CA1);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn new(driver: usize, red: u8, green: u8, blue: u8) -> Self { Self { blue, driver, green, red } }
+
+    /// Returns the PWM register address for the red channel.
+    #[inline]
+    #[must_use]
+    pub const fn red(self) -> u8 { self.red }
 }
 
 /// PWM shadow buffer and dirty flag for a single driver chip.

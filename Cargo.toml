@@ -30,8 +30,9 @@ nursery = { level = "deny", priority = 1 }
 [lints]
 workspace = true
 
-[[dylib]]
+[lib]
 name = "snled27351_driver"
+crate-type = ["dylib"]
 test = false
 bench = false
 

@@ -1,0 +1,2 @@
+[unstable]
+cargo-lints = true

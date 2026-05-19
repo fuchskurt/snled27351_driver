@@ -5,10 +5,9 @@
 //! the same register logic to run over both SPI and I2C without duplication.
 //! Select the appropriate transport for your hardware:
 //!
-//! - [`spi::Controller`] — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus),
+//! - `spi::Controller` — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus),
 //!   N CS [`OutputPin`](embedded_hal::digital::OutputPin)s, and one SDB pin.
-//! - [`i2c::Controller`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus
-//!   and N 7-bit device addresses.
+//! - `i2c::Controller` — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus
 //!
 //! When exactly one transport feature is enabled, its controller is also
 //! re-exported as `transport::Controller` for convenience. When both features

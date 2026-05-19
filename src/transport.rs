@@ -5,15 +5,23 @@
 //! the same register logic to run over both SPI and I2C without duplication.
 //! Select the appropriate transport for your hardware:
 //!
-//! - [`Controller`] — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus), N CS
-//!   [`OutputPin`](embedded_hal::digital::OutputPin)s, and one SDB pin.
-//! - [`Controller`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus and N
-//!   7-bit device addresses.
+//! - [`spi::Controller`] — wraps a [`SpiBus`](embedded_hal_async::spi::SpiBus),
+//!   N CS [`OutputPin`](embedded_hal::digital::OutputPin)s, and one SDB pin.
+//! - [`i2c::Controller`] — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus
+//!   and N 7-bit device addresses.
+//!
+//! When exactly one transport feature is enabled, its controller is also
+//! re-exported as `transport::Controller` for convenience. When both features
+//! are enabled (Cargo features are additive, so this can happen via feature
+//! unification), refer to the controllers by their module paths
+//! `transport::spi::Controller` and `transport::i2c::Controller`.
 #[cfg(feature = "i2c")] pub mod i2c;
 #[cfg(feature = "spi")] pub mod spi;
 use core::fmt::Debug;
-#[cfg(feature = "i2c")] pub use i2c::Controller;
-#[cfg(feature = "spi")] pub use spi::Controller;
+#[cfg(all(feature = "i2c", not(feature = "spi")))]
+pub use i2c::Controller;
+#[cfg(all(feature = "spi", not(feature = "i2c")))]
+pub use spi::Controller;
 /// Abstraction over the physical bus used to communicate with one or more
 /// SNLED27351 driver chips.
 ///

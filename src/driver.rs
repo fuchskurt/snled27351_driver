@@ -174,14 +174,14 @@ where
     #[inline]
     pub async fn flush(&mut self) -> Result<(), T::Error> {
         for chip_index in 0..N {
-            let dirty = self.bufs.get(chip_index).is_some_and(|buf| buf.dirty);
-            if !dirty {
-                continue;
-            }
-            // Copy the PWM buffer to the stack to release the borrow on
-            // `self.bufs` before the async transport call.
+            // Skip clean buffers (so a flush after a no-op `stage_led` is
+            // free) and copy the PWM buffer to the stack to release the
+            // borrow on `self.bufs` before the async transport call.
             let pwm = {
                 let Some(buf) = self.bufs.get(chip_index) else { continue };
+                if !buf.dirty {
+                    continue;
+                }
                 buf.pwm
             };
             match self.transport.write_page(chip_index, PAGE_PWM, 0x00, &pwm).await {

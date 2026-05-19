@@ -6,7 +6,6 @@
 //!
 //! Address formula: `(cb_index - 1) * 0x10 + (ca_index - 1)` where both
 //! indices are 1-based.
-//#![expect(dead_code, reason = "Not all addresses are used in every layout")]
 
 pub const CB1_CA1: u8 = 0x00;
 pub const CB1_CA2: u8 = 0x01;

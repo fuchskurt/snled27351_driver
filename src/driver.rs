@@ -30,6 +30,7 @@ use crate::{
     },
     transport::Transport,
 };
+use embassy_time::Timer;
 
 /// Mapping of a single RGB LED to its three PWM register addresses on one
 /// driver chip.
@@ -215,7 +216,8 @@ where
             Ok(()) => {},
             Err(err) => return Err(err),
         }
-
+        // SNLED27351 power-on/reset stabilization (tPOR) before first register access.
+        Timer::after_millis(2).await;
         for chip_index in 0..N {
             // Enter shutdown so registers can be safely programmed.
             match self

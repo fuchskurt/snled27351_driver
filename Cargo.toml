@@ -8,12 +8,12 @@ license = "MIT OR Apache-2.0"
 
 [features]
 i2c = []
-spi = ["dep:embassy-time"]
+spi = []
 
 [dependencies]
 embedded-hal = "1"
 embedded-hal-async = "1"
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", optional = true }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
 
 [workspace]
 

@@ -2,7 +2,10 @@
 //!
 //! [`Controller`] owns N [`SpiDevice`] instances (one per chip) each of
 //! which manages its own CS line. An additional `S: OutputPin` drives the
-//! shared SDB (hardware shutdown) line.
+//! shared SDB (hardware shutdown) line; use
+//! [`NoSdb`](crate::transport::NoSdb) if SDB is strapped high in hardware.
+//!
+//! The maximum supported SCK frequency is 4 MHz (datasheet section 5).
 //!
 //! # SPI frame format
 //!
@@ -48,7 +51,9 @@ where
     /// Creates a new [`Controller`].
     ///
     /// `devices` must be in the same order as the driver indices used by
-    /// [`crate::driver::Driver`].
+    /// [`crate::driver::Driver`]. `sdb` is the shared SDB line; pass
+    /// [`NoSdb`](crate::transport::NoSdb) if it is strapped high in
+    /// hardware.
     #[inline]
     pub const fn new(devices: [D; N], sdb: S) -> Self { Self { devices, sdb } }
 }
@@ -93,16 +98,23 @@ where
 
     #[inline]
     async fn reset(&mut self) -> Result<(), Self::Error> {
-        // Pull SDB low to enter hardware shutdown, then release.
-        if self.sdb.set_low().is_err() {
-            return Err(TransportError::Pin);
-        }
+        // Cycle SDB through hardware sleep and back to reach a known power
+        // state (registers are retained; `init` reprograms them anyway).
+        // Datasheet: entering hardware sleep takes 16 µs.
+        self.set_sdb(false)?;
         Timer::after_micros(250).await;
-        if self.sdb.set_high().is_err() {
+        self.set_sdb(true)?;
+        // Datasheet: 128 µs wakeup time before the first register access.
+        Timer::after_micros(500).await;
+        Ok(())
+    }
+
+    #[inline]
+    fn set_sdb(&mut self, enable: bool) -> Result<(), Self::Error> {
+        let result = if enable { self.sdb.set_high() } else { self.sdb.set_low() };
+        if result.is_err() {
             return Err(TransportError::Pin);
         }
-        // Datasheet requires ~500 µs before the first register access.
-        Timer::after_micros(500).await;
         Ok(())
     }
 

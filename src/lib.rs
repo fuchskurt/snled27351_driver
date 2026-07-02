@@ -10,3 +10,6 @@ pub mod driver;
 pub mod led_address;
 pub mod registers;
 pub mod transport;
+pub use driver::{Driver, Led, LedStatusMap};
+pub use led_address::pwm_register;
+pub use transport::{Error as TransportError, NoSdb, Transport};

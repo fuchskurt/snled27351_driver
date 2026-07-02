@@ -19,6 +19,7 @@
 //! - Byte 1: register address
 //! - Byte 2: dummy — chip drives the response byte here
 
+pub use crate::transport::Error as TransportError;
 use crate::{
     registers::{PATTERN_CMD, PWM_REGISTER_COUNT, READ_CMD, WRITE_CMD},
     transport::Transport,
@@ -58,20 +59,6 @@ where
     pub const fn new(devices: [D; N], sdb: S) -> Self { Self { devices, sdb } }
 }
 
-/// Errors that can occur in the SPI transport.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum TransportError<Error> {
-    /// The driver index was out of range.
-    InvalidIndex,
-    /// The data payload exceeded the maximum transfer size.
-    PayloadTooLarge,
-    /// An `OutputPin` operation failed.
-    Pin,
-    /// An SPI bus error occurred.
-    Spi(Error),
-}
-
 impl<D, S, const N: usize> Transport for Controller<D, S, N>
 where
     D: SpiDevice,
@@ -89,7 +76,7 @@ where
         let mut rx = [0_u8; 3];
 
         // CS is asserted for the full transaction and released on drop.
-        device.transaction(&mut [Operation::Transfer(&mut rx, &tx)]).await.map_err(TransportError::Spi)?;
+        device.transaction(&mut [Operation::Transfer(&mut rx, &tx)]).await?;
 
         // The chip drives the response on the third byte of the transfer.
         let [_, _, value] = rx;
@@ -132,6 +119,7 @@ where
 
         // CS stays asserted across both operations and is released on drop,
         // so the chip sees a single continuous frame: header, then payload.
-        device.transaction(&mut [Operation::Write(&header), Operation::Write(data)]).await.map_err(TransportError::Spi)
+        device.transaction(&mut [Operation::Write(&header), Operation::Write(data)]).await?;
+        Ok(())
     }
 }

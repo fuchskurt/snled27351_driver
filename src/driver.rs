@@ -66,7 +66,7 @@ const DETECTION_POLL_ATTEMPTS: u32 = 50;
 
 /// Mapping of a single RGB LED to its three PWM register addresses on one
 /// driver chip.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[non_exhaustive]
 pub struct Led {
     /// PWM register address for the blue channel.
@@ -131,7 +131,7 @@ impl Led {
 /// Wraps the 24-byte LED open (or short) register block of one chip. Bits
 /// are addressed by PWM register address, so results can be queried with the
 /// same addresses used to build the [`Led`] layout.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct LedStatusMap {
     /// Raw status register contents; index is the offset within the block.
     flags: [u8; LED_OPEN_REGISTER_COUNT],
@@ -173,14 +173,10 @@ impl DriverBuf {
 
     /// Writes RGB values into the shadow buffer for one LED and marks dirty.
     fn stage(&mut self, led: Led, red: u8, green: u8, blue: u8) {
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.red)) {
-            *slot = red;
-        }
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.green)) {
-            *slot = green;
-        }
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.blue)) {
-            *slot = blue;
+        for (addr, value) in [(led.red, red), (led.green, green), (led.blue, blue)] {
+            if let Some(slot) = self.pwm.get_mut(usize::from(addr)) {
+                *slot = value;
+            }
         }
         self.dirty = true;
     }
@@ -402,6 +398,11 @@ where
         Ok(())
     }
 
+    /// Consumes the driver and returns the underlying transport.
+    #[inline]
+    #[must_use]
+    pub fn into_transport(self) -> T { self.transport }
+
     /// Creates a new driver from the given transport and LED layout.
     ///
     /// Call [`init`](Self::init) before writing any LED values.
@@ -576,6 +577,17 @@ where
         let Some(buf) = self.bufs.get_mut(led.driver) else { return };
         buf.stage(led, red, green, blue);
     }
+
+    /// Returns a shared reference to the underlying transport.
+    #[inline]
+    #[must_use]
+    pub const fn transport(&self) -> &T { &self.transport }
+
+    /// Returns a mutable reference to the underlying transport, e.g. to
+    /// drive [`set_sdb`](Transport::set_sdb) directly.
+    #[inline]
+    #[must_use]
+    pub const fn transport_mut(&mut self) -> &mut T { &mut self.transport }
 
     /// Releases all driver chips from software shutdown or software sleep
     /// mode.

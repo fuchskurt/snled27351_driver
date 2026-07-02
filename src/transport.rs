@@ -127,3 +127,29 @@ pub trait Transport {
     )]
     async fn write_page(&mut self, driver_index: usize, page: u8, reg: u8, data: &[u8]) -> Result<(), Self::Error>;
 }
+
+/// Errors that can occur in the provided bus transports.
+///
+/// `E` is the underlying bus error type ([`SpiDevice::Error`] for SPI,
+/// [`I2c::Error`] for I2C). Also available as `TransportError` from the
+/// crate root and the transport submodules.
+///
+/// [`SpiDevice::Error`]: embedded_hal_async::spi::ErrorType::Error
+/// [`I2c::Error`]: embedded_hal_async::i2c::ErrorType::Error
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error<E> {
+    /// An underlying bus (SPI or I2C) error occurred.
+    Bus(E),
+    /// The driver index was out of range.
+    InvalidIndex,
+    /// The data payload exceeded the maximum transfer size.
+    PayloadTooLarge,
+    /// An `OutputPin` operation failed.
+    Pin,
+}
+
+impl<E> From<E> for Error<E> {
+    #[inline]
+    fn from(error: E) -> Self { Self::Bus(error) }
+}

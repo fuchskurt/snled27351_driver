@@ -24,6 +24,7 @@
 //! Splitting into two frames is still race-free for this driver: it holds
 //! `&mut` access to the bus (or bus device) for the whole call, and traffic
 //! to other devices on a shared bus does not affect this chip's page state.
+pub use crate::transport::Error as TransportError;
 use crate::{
     registers::{CONFIGURE_CMD_PAGE, PWM_REGISTER_COUNT},
     transport::{NoSdb, Transport},
@@ -80,31 +81,26 @@ where
     S: OutputPin,
 {
     /// Selects the active register page on chip `driver_index` by writing
-    /// the page number to the command register (`0xFD`).
+    /// the page number to the command register (`0xFD`), and returns the
+    /// chip's bus address for the follow-up transfer.
     ///
-    /// Skipped when the cached page already matches; see the module
-    /// documentation for why this is a separate bus frame.
-    async fn select_page(
-        &mut self,
-        driver_index: usize,
-        address: u8,
-        page: u8,
-    ) -> Result<(), TransportError<B::Error>> {
+    /// The page write is skipped when the cached page already matches; see
+    /// the module documentation for why it is a separate bus frame.
+    async fn select_page(&mut self, driver_index: usize, page: u8) -> Result<u8, TransportError<B::Error>> {
+        let Some(&address) = self.address.get(driver_index) else {
+            return Err(TransportError::InvalidIndex);
+        };
         let Some(cached) = self.pages.get_mut(driver_index) else {
             return Err(TransportError::InvalidIndex);
         };
         if *cached == Some(page) {
-            return Ok(());
+            return Ok(address);
         }
         // Invalidate first so a failed transfer never leaves a stale entry.
         *cached = None;
-        match self.bus.write(address, &[CONFIGURE_CMD_PAGE, page]).await {
-            Ok(()) => {
-                *cached = Some(page);
-                Ok(())
-            },
-            Err(error) => Err(TransportError::I2c(error)),
-        }
+        self.bus.write(address, &[CONFIGURE_CMD_PAGE, page]).await?;
+        *cached = Some(page);
+        Ok(address)
     }
 
     /// Creates a new [`Controller`] from the given I2C bus, address list,
@@ -118,20 +114,6 @@ where
     }
 }
 
-/// Errors that can occur in the I2C transport.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum TransportError<E> {
-    /// An I2C bus error occurred.
-    I2c(E),
-    /// The driver index was out of range.
-    InvalidIndex,
-    /// The data payload exceeded the maximum transfer size.
-    PayloadTooLarge,
-    /// An `OutputPin` operation failed.
-    Pin,
-}
-
 impl<B, S, const N: usize> Transport for Controller<B, S, N>
 where
     B: I2c,
@@ -141,16 +123,12 @@ where
 
     #[inline]
     async fn read_reg(&mut self, driver_index: usize, page: u8, reg: u8) -> Result<u8, Self::Error> {
-        let Some(&address) = self.address.get(driver_index) else {
-            return Err(TransportError::InvalidIndex);
-        };
-
-        self.select_page(driver_index, address, page).await?;
+        let address = self.select_page(driver_index, page).await?;
 
         // Write the register pointer, then read one byte after a repeated
         // START (datasheet section 4.2, steps 2 and 3).
         let mut buf = [0_u8; 1];
-        self.bus.write_read(address, &[reg], &mut buf).await.map_err(TransportError::I2c)?;
+        self.bus.write_read(address, &[reg], &mut buf).await?;
 
         let [value] = buf;
         Ok(value)
@@ -186,11 +164,7 @@ where
             return Err(TransportError::PayloadTooLarge);
         }
 
-        let Some(&address) = self.address.get(driver_index) else {
-            return Err(TransportError::InvalidIndex);
-        };
-
-        self.select_page(driver_index, address, page).await?;
+        let address = self.select_page(driver_index, page).await?;
 
         // Build the outgoing frame [reg, payload...] in a fixed buffer.
         let mut buf = [0_u8; PWM_REGISTER_COUNT.saturating_add(1)];
@@ -204,6 +178,7 @@ where
         *reg_slot = reg;
         payload.copy_from_slice(data);
 
-        self.bus.write(address, frame).await.map_err(TransportError::I2c)
+        self.bus.write(address, frame).await?;
+        Ok(())
     }
 }

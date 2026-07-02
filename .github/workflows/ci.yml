@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Format, clippy, and docs (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy (feature matrix)
+        run: |
+          cargo clippy
+          cargo clippy --features spi
+          cargo clippy --features i2c
+          cargo clippy --features spi,i2c
+
+      - name: Docs
+        run: cargo doc --no-deps --document-private-items --features spi,i2c
+
+  stable:
+    name: Build on stable (feature matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check (feature matrix)
+        run: |
+          cargo check
+          cargo check --features spi
+          cargo check --features i2c
+          cargo check --features spi,i2c

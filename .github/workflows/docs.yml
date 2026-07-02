@@ -6,7 +6,6 @@ on:
     paths:
       - "src/**"
       - "Cargo.toml"
-      - ".cargo/**"
   workflow_dispatch:
 
 permissions:

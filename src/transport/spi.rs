@@ -17,14 +17,13 @@
 //! Each read transfer is:
 //! - Byte 0: `READ_CMD | PATTERN_CMD | (page & 0x0F)`
 //! - Byte 1: register address
-//! - Byte 2: dummy — chip drives the response byte here
+//! - Byte 2: dummy - chip drives the response byte here
 
 pub use crate::transport::Error as TransportError;
 use crate::{
     registers::{PATTERN_CMD, PWM_REGISTER_COUNT, READ_CMD, WRITE_CMD},
-    transport::Transport,
+    transport::{Transport, cycle_sdb, drive_sdb},
 };
-use embassy_time::Timer;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::spi::{Operation, SpiDevice};
 
@@ -87,23 +86,11 @@ where
     async fn reset(&mut self) -> Result<(), Self::Error> {
         // Cycle SDB through hardware sleep and back to reach a known power
         // state (registers are retained; `init` reprograms them anyway).
-        // Datasheet: entering hardware sleep takes 16 µs.
-        self.set_sdb(false)?;
-        Timer::after_micros(250).await;
-        self.set_sdb(true)?;
-        // Datasheet: 128 µs wakeup time before the first register access.
-        Timer::after_micros(500).await;
-        Ok(())
+        cycle_sdb(&mut self.sdb).await
     }
 
     #[inline]
-    fn set_sdb(&mut self, enable: bool) -> Result<(), Self::Error> {
-        let result = if enable { self.sdb.set_high() } else { self.sdb.set_low() };
-        if result.is_err() {
-            return Err(TransportError::Pin);
-        }
-        Ok(())
-    }
+    fn set_sdb(&mut self, enable: bool) -> Result<(), Self::Error> { drive_sdb(&mut self.sdb, enable) }
 
     #[inline]
     async fn write_page(&mut self, driver_index: usize, page: u8, reg: u8, data: &[u8]) -> Result<(), Self::Error> {

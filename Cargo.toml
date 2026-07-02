@@ -9,6 +9,9 @@ license = "MIT OR Apache-2.0"
 categories = ["embedded", "no-std", "hardware-support"]
 keywords = ["led", "driver", "embedded-hal", "async", "no-std"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 i2c = []
 spi = []

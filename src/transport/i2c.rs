@@ -10,7 +10,7 @@
 //! so each register access is up to two bus frames:
 //!
 //! 1. A write to the command register (`0xFD`) selecting the active page.
-//!    Skipped when the page is already selected — the transport caches the
+//!    Skipped when the page is already selected - the transport caches the
 //!    selected page per chip, as permitted by datasheet section 4.2.
 //! 2. The register write (or a write-read for register reads).
 //!
@@ -33,9 +33,8 @@
 pub use crate::transport::Error as TransportError;
 use crate::{
     registers::{CONFIGURE_CMD_PAGE, PWM_REGISTER_COUNT},
-    transport::{NoSdb, Transport},
+    transport::{NoSdb, Transport, cycle_sdb, drive_sdb},
 };
-use embassy_time::Timer;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::i2c::{I2c, Operation};
 
@@ -146,23 +145,11 @@ where
         self.pages = [None; N];
         // Cycle SDB through hardware sleep and back to reach a known power
         // state (a no-op with `NoSdb`; registers are retained either way).
-        // Datasheet: entering hardware sleep takes 16 µs.
-        self.set_sdb(false)?;
-        Timer::after_micros(250).await;
-        self.set_sdb(true)?;
-        // Datasheet: 128 µs wakeup time before the first register access.
-        Timer::after_micros(500).await;
-        Ok(())
+        cycle_sdb(&mut self.sdb).await
     }
 
     #[inline]
-    fn set_sdb(&mut self, enable: bool) -> Result<(), Self::Error> {
-        let result = if enable { self.sdb.set_high() } else { self.sdb.set_low() };
-        if result.is_err() {
-            return Err(TransportError::Pin);
-        }
-        Ok(())
-    }
+    fn set_sdb(&mut self, enable: bool) -> Result<(), Self::Error> { drive_sdb(&mut self.sdb, enable) }
 
     #[inline]
     async fn write_page(&mut self, driver_index: usize, page: u8, reg: u8, data: &[u8]) -> Result<(), Self::Error> {
@@ -174,7 +161,7 @@ where
 
         // Send [reg, payload...] as one frame without buffering: the
         // transaction contract merges adjacent write operations into a
-        // single frame (no repeated START between them) — the same merge
+        // single frame (no repeated START between them) - the same merge
         // rule that forces the page select above to be a separate frame.
         self.bus.transaction(address, &mut [Operation::Write(&[reg]), Operation::Write(data)]).await?;
         Ok(())

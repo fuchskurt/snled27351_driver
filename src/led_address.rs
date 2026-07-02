@@ -8,7 +8,7 @@
 //! 1-based, exactly as printed in the datasheet RAM map.
 
 /// Returns the PWM register address for the LED at sink channel `cb`
-/// (CB1–CB12) and source channel `ca` (CA1–CA16), both 1-based as in the
+/// (CB1-CB12) and source channel `ca` (CA1-CA16), both 1-based as in the
 /// datasheet.
 ///
 /// # Example

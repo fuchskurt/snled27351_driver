@@ -5,10 +5,10 @@
 //! the same register logic to run over both SPI and I2C without duplication.
 //! Select the appropriate transport for your hardware:
 //!
-//! - `spi::Controller` — wraps N
+//! - `spi::Controller` - wraps N
 //!   [`SpiDevice`](embedded_hal_async::spi::SpiDevice)s (one per chip, each
 //!   managing its own CS line) and one SDB pin.
-//! - `i2c::Controller` — wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus,
+//! - `i2c::Controller` - wraps an [`I2c`](embedded_hal_async::i2c::I2c) bus,
 //!   one 7-bit address per chip, and an optional SDB pin (see [`NoSdb`]).
 //!
 //! When exactly one transport feature is enabled, its controller is also
@@ -19,6 +19,8 @@
 #[cfg(feature = "i2c")] pub mod i2c;
 #[cfg(feature = "spi")] pub mod spi;
 use core::{convert::Infallible, fmt::Debug};
+#[cfg(any(feature = "i2c", feature = "spi"))]
+use embassy_time::Timer;
 use embedded_hal::digital::{ErrorType, OutputPin, PinState};
 #[cfg(all(feature = "i2c", not(feature = "spi")))]
 pub use i2c::Controller;
@@ -152,4 +154,34 @@ pub enum Error<E> {
 impl<E> From<E> for Error<E> {
     #[inline]
     fn from(error: E) -> Self { Self::Bus(error) }
+}
+
+/// Cycles the SDB line through hardware sleep and back with the datasheet
+/// timing. Shared by the transports' [`Transport::reset`] implementations.
+#[cfg(any(feature = "i2c", feature = "spi"))]
+pub(crate) async fn cycle_sdb<P, E>(sdb: &mut P) -> Result<(), Error<E>>
+where
+    P: OutputPin,
+{
+    // Datasheet: entering hardware sleep takes 16 µs.
+    drive_sdb(sdb, false)?;
+    Timer::after_micros(250).await;
+    drive_sdb(sdb, true)?;
+    // Datasheet: 128 µs wakeup time before the first register access.
+    Timer::after_micros(500).await;
+    Ok(())
+}
+
+/// Drives an SDB pin, mapping pin failures to [`Error::Pin`]. Shared by the
+/// transports' [`Transport::set_sdb`] implementations.
+#[cfg(any(feature = "i2c", feature = "spi"))]
+pub(crate) fn drive_sdb<P, E>(sdb: &mut P, enable: bool) -> Result<(), Error<E>>
+where
+    P: OutputPin,
+{
+    let result = if enable { sdb.set_high() } else { sdb.set_low() };
+    if result.is_err() {
+        return Err(Error::Pin);
+    }
+    Ok(())
 }

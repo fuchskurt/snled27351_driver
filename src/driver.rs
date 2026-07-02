@@ -201,11 +201,11 @@ impl DriverBuf {
 ///
 /// The chip distinguishes three low-power states (datasheet section 3):
 ///
-/// - [`shutdown`](Self::shutdown): software shutdown — outputs off, registers
+/// - [`shutdown`](Self::shutdown): software shutdown - outputs off, registers
 ///   accessible (~2.1 mA).
-/// - [`software_sleep`](Self::software_sleep): software sleep — lowest power
+/// - [`software_sleep`](Self::software_sleep): software sleep - lowest power
 ///   (~1.5 µA), registers inaccessible, woken by bus activity.
-/// - [`hardware_sleep`](Self::hardware_sleep): SDB pin low — same power as
+/// - [`hardware_sleep`](Self::hardware_sleep): SDB pin low - same power as
 ///   software sleep, woken only by the SDB pin.
 ///
 /// [`wake`](Self::wake) returns to normal mode from software shutdown or
@@ -245,7 +245,7 @@ where
     /// Runs an open-circuit detection scan on driver chip `index`.
     ///
     /// `duty` is the latched PWM duty used during the scan (clamped to the
-    /// valid 0x01–0xFA range). The chip must be initialized and in normal
+    /// valid 0x01-0xFA range). The chip must be initialized and in normal
     /// operating mode; only channels enabled in the LED control register
     /// are tested ([`init`](Self::init) enables all of them).
     ///
@@ -389,7 +389,7 @@ where
             // Enable all LED channels.
             transport.write_page(chip_index, PAGE_LED_CONTROL, 0x00, &[0xFF_u8; LED_CONTROL_REGISTER_COUNT]).await?;
 
-            // Release shutdown — chip enters normal operating mode.
+            // Release shutdown - chip enters normal operating mode.
             transport
                 .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_NORMAL])
                 .await?;
@@ -481,7 +481,7 @@ where
     /// Updates the constant-current step for all CB channels on driver `index`.
     ///
     /// `value` maps to output current as `Iout = value × 0.157 mA` for
-    /// values 4–255. Values 1–3 produce ~0.47 mA; 0 disables current.
+    /// values 4-255. Values 1-3 produce ~0.47 mA; 0 disables current.
     ///
     /// # Errors
     ///
@@ -603,7 +603,7 @@ where
     #[inline]
     pub async fn wake(&mut self) -> Result<(), T::Error> {
         // Generate bus activity to wake sleeping chips. A sleeping chip may
-        // ignore or NACK this write — only the clock edges matter, so the
+        // ignore or NACK this write - only the clock edges matter, so the
         // result is intentionally discarded. For chips that are merely shut
         // down it rewrites the value they already hold.
         match self.write_function_all(REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await {

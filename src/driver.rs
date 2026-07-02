@@ -32,6 +32,16 @@ use crate::{
 };
 use embassy_time::Timer;
 
+/// Function-page `(register, value)` pairs written to every chip during
+/// [`Driver::init`], in write order.
+const INIT_FUNCTION_CONFIG: [(u8, u8); 5] = [
+    (REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED),
+    (REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL),
+    (REG_SLEW_RATE_CONTROL_MODE_1, SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE),
+    (REG_SLEW_RATE_CONTROL_MODE_2, SLEW_RATE_CONTROL_MODE_2_ALL_ENABLE),
+    (REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE),
+];
+
 /// Mapping of a single RGB LED to its three PWM register addresses on one
 /// driver chip.
 #[derive(Copy, Clone)]
@@ -105,7 +115,7 @@ impl DriverBuf {
     const fn new() -> Self { Self { dirty: false, pwm: [0_u8; PWM_REGISTER_COUNT] } }
 
     /// Writes RGB values into the shadow buffer for one LED and marks dirty.
-    const fn stage(&mut self, led: Led, red: u8, green: u8, blue: u8) {
+    fn stage(&mut self, led: Led, red: u8, green: u8, blue: u8) {
         if let Some(slot) = self.pwm.get_mut(usize::from(led.red)) {
             *slot = red;
         }
@@ -128,7 +138,7 @@ impl DriverBuf {
 /// # Usage
 ///
 /// ```ignore
-/// let transport = SpiTransport::new(devices, sdb_pin);
+/// let transport = spi::Controller::new(devices, sdb_pin);
 /// let mut driver = Driver::new(transport, &LED_LAYOUT);
 /// driver.init(0xFF).await?;
 /// driver.set_all_leds(255, 255, 255).await?;
@@ -151,14 +161,16 @@ where
 {
     /// Reads the thermal detector flag (TDF) from driver chip `index`.
     ///
-    /// Returns `true` if the chip reports temperature >= 70 °C.
-    /// Returns `false` if the index is out of range or the read fails.
+    /// Returns `Ok(true)` if the chip reports temperature >= 70 °C.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(T::Error)` if the index is out of range or the bus read
+    /// fails.
     #[inline]
-    pub async fn check_thermal_flag_set(&mut self, index: usize) -> bool {
-        self.transport
-            .read_reg(index, PAGE_FUNCTION, REG_THERMAL)
-            .await
-            .is_ok_and(|thermal_reg| thermal_reg & MSK_THERMAL_FLAG != 0)
+    pub async fn check_thermal_flag_set(&mut self, index: usize) -> Result<bool, T::Error> {
+        let thermal_reg = self.transport.read_reg(index, PAGE_FUNCTION, REG_THERMAL).await?;
+        Ok(thermal_reg & MSK_THERMAL_FLAG != 0)
     }
 
     /// Flushes all dirty PWM shadow buffers to hardware.
@@ -174,24 +186,16 @@ where
     /// on the next call.
     #[inline]
     pub async fn flush(&mut self) -> Result<(), T::Error> {
-        for chip_index in 0..N {
-            // Skip clean buffers (so a flush after a no-op `stage_led` is
-            // free) and copy the PWM buffer to the stack to release the
-            // borrow on `self.bufs` before the async transport call.
-            let pwm = {
-                let Some(buf) = self.bufs.get(chip_index) else { continue };
-                if !buf.dirty {
-                    continue;
-                }
-                buf.pwm
-            };
-            match self.transport.write_page(chip_index, PAGE_PWM, 0x00, &pwm).await {
-                Ok(()) => {},
-                Err(err) => return Err(err),
+        // Borrow the buffers and the transport as disjoint fields so the
+        // shadow buffer can be written directly from `self.bufs` while
+        // `self.transport` is borrowed mutably for the bus call.
+        let transport = &mut self.transport;
+        for (chip_index, buf) in self.bufs.iter_mut().enumerate() {
+            if !buf.dirty {
+                continue;
             }
-            if let Some(buf) = self.bufs.get_mut(chip_index) {
-                buf.dirty = false;
-            }
+            transport.write_page(chip_index, PAGE_PWM, 0x00, &buf.pwm).await?;
+            buf.dirty = false;
         }
         Ok(())
     }
@@ -212,111 +216,42 @@ where
     /// initialization. The chip state is undefined if this occurs.
     #[inline]
     pub async fn init(&mut self, current_tune: u8) -> Result<(), T::Error> {
-        match self.transport.reset().await {
-            Ok(()) => {},
-            Err(err) => return Err(err),
-        }
+        self.transport.reset().await?;
         // SNLED27351 power-on/reset stabilization (tPOR) before first register access.
         Timer::after_millis(10).await;
-        for chip_index in 0..N {
+
+        let transport = &mut self.transport;
+        for (chip_index, buf) in self.bufs.iter_mut().enumerate() {
             // Enter shutdown so registers can be safely programmed.
-            match self
-                .transport
+            transport
                 .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_SHUTDOWN])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+                .await?;
 
             // Configure function registers.
-            match self.transport.write_page(chip_index, PAGE_FUNCTION, REG_PULLDOWNUP, &[PULLDOWNUP_ALL_ENABLED]).await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-            match self.transport.write_page(chip_index, PAGE_FUNCTION, REG_SCAN_PHASE, &[SCAN_PHASE_12_CHANNEL]).await {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-            match self
-                .transport
-                .write_page(chip_index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, &[
-                    SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE,
-                ])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-            match self
-                .transport
-                .write_page(chip_index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, &[
-                    SLEW_RATE_CONTROL_MODE_2_ALL_ENABLE,
-                ])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-            match self
-                .transport
-                .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, &[SOFTWARE_SLEEP_DISABLE])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
+            for &(reg, value) in &INIT_FUNCTION_CONFIG {
+                transport.write_page(chip_index, PAGE_FUNCTION, reg, &[value]).await?;
             }
 
             // Clear LED control registers (all off).
-            match self
-                .transport
-                .write_page(chip_index, PAGE_LED_CONTROL, 0x00, &[0x00_u8; LED_CONTROL_REGISTER_COUNT])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+            transport.write_page(chip_index, PAGE_LED_CONTROL, 0x00, &[0x00_u8; LED_CONTROL_REGISTER_COUNT]).await?;
 
             // Zero all PWM registers and sync the shadow buffer.
-            match self.transport.write_page(chip_index, PAGE_PWM, 0x00, &[0x00_u8; PWM_REGISTER_COUNT]).await {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-            if let Some(buf) = self.bufs.get_mut(chip_index) {
-                buf.pwm.fill(0x00);
-                buf.dirty = false;
-            }
+            transport.write_page(chip_index, PAGE_PWM, 0x00, &[0x00_u8; PWM_REGISTER_COUNT]).await?;
+            buf.pwm.fill(0x00);
+            buf.dirty = false;
 
             // Program current tune for all CB channels.
-            match self
-                .transport
+            transport
                 .write_page(chip_index, PAGE_CURRENT_TUNE, 0x00, &[current_tune; CURRENT_TUNE_REGISTER_COUNT])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+                .await?;
 
             // Enable all LED channels.
-            match self
-                .transport
-                .write_page(chip_index, PAGE_LED_CONTROL, 0x00, &[0xFF_u8; LED_CONTROL_REGISTER_COUNT])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+            transport.write_page(chip_index, PAGE_LED_CONTROL, 0x00, &[0xFF_u8; LED_CONTROL_REGISTER_COUNT]).await?;
 
             // Release shutdown — chip enters normal operating mode.
-            match self
-                .transport
+            transport
                 .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_NORMAL])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+                .await?;
         }
 
         Ok(())
@@ -366,7 +301,7 @@ where
         self.flush().await
     }
 
-    /// Puts all driver chips into hardware shutdown mode.
+    /// Puts all driver chips into software shutdown mode.
     ///
     /// Cuts LED current immediately. Call [`wake`](Self::wake) to resume.
     ///
@@ -375,23 +310,13 @@ where
     /// Returns `Err(T::Error)` if any bus transaction fails.
     #[inline]
     pub async fn shutdown(&mut self) -> Result<(), T::Error> {
-        for chip_index in 0..N {
-            match self
-                .transport
-                .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_SHUTDOWN])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
-        }
-        Ok(())
+        self.write_function_all(REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await
     }
 
     /// Stages RGB values for all LEDs in the layout without flushing.
     #[inline]
     pub fn stage_all_leds(&mut self, red: u8, green: u8, blue: u8) {
-        let leds: &'static [Led] = self.leds;
+        let leds = self.leds;
         for &led in leds {
             let Some(buf) = self.bufs.get_mut(led.driver) else { continue };
             buf.stage(led, red, green, blue);
@@ -403,28 +328,26 @@ where
     /// Does nothing if `led_index` is out of bounds. Call
     /// [`flush`](Self::flush) to transmit pending changes.
     #[inline]
-    pub const fn stage_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
+    pub fn stage_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
         let Some(&led) = self.leds.get(led_index) else { return };
         let Some(buf) = self.bufs.get_mut(led.driver) else { return };
         buf.stage(led, red, green, blue);
     }
 
-    /// Releases all driver chips from hardware shutdown mode.
+    /// Releases all driver chips from software shutdown mode.
     ///
     /// # Errors
     ///
     /// Returns `Err(T::Error)` if any bus transaction fails.
     #[inline]
     pub async fn wake(&mut self) -> Result<(), T::Error> {
+        self.write_function_all(REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await
+    }
+
+    /// Writes `value` to function-page register `reg` on all `N` chips.
+    async fn write_function_all(&mut self, reg: u8, value: u8) -> Result<(), T::Error> {
         for chip_index in 0..N {
-            match self
-                .transport
-                .write_page(chip_index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, &[SOFTWARE_SHUTDOWN_SSD_NORMAL])
-                .await
-            {
-                Ok(()) => {},
-                Err(err) => return Err(err),
-            }
+            self.transport.write_page(chip_index, PAGE_FUNCTION, reg, &[value]).await?;
         }
         Ok(())
     }

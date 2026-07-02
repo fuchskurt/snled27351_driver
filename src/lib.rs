@@ -6,7 +6,6 @@
 //! [`transport::Transport`] implementation and never duplicates register logic
 //! between transports.
 #![no_std]
-#![feature(const_convert, const_index, const_trait_impl)]
 pub mod driver;
 pub mod led_address;
 pub mod registers;

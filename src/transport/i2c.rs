@@ -1,15 +1,29 @@
 //! I2C transport implementation for the SNLED27351 driver.
 //!
 //! Uses [`I2c`] with one 7-bit device address per driver chip.
-//! Page selection and payload transfer are combined into a single
-//! repeated-START transaction (Sr), which atomically holds the bus
-//! across both operations and prevents another master or async task
-//! from interleaving between page select and the actual transfer.
+//!
+//! # Framing
+//!
+//! The SNLED27351 treats every I2C write frame as `[register, data...]`,
+//! so each register access is two bus frames:
+//!
+//! 1. A write to the command register (`0xFD`) selecting the active page.
+//! 2. The register write (or a write-read for register reads).
+//!
+//! The page select must be its own STOP-terminated frame: it cannot be
+//! combined with the following access inside one `transaction()`, because
+//! [`I2c::transaction`] merges adjacent write operations into a single
+//! frame — the chip would then see `[0xFD, page, reg, data...]` and
+//! auto-increment the payload into the wrong registers.
+//!
+//! Splitting into two frames is still race-free for this driver: it holds
+//! `&mut` access to the bus (or bus device) for the whole call, and traffic
+//! to other devices on a shared bus does not affect this chip's page state.
 use crate::{
     registers::{CONFIGURE_CMD_PAGE, PWM_REGISTER_COUNT},
     transport::Transport,
 };
-use embedded_hal_async::i2c::{I2c, Operation};
+use embedded_hal_async::i2c::I2c;
 
 /// I2C transport for `N` SNLED27351 driver chips on a shared bus.
 ///
@@ -35,6 +49,14 @@ where
     /// [`Driver`](crate::driver::Driver).
     #[inline]
     pub const fn new(bus: B, addrs: [u8; N]) -> Self { Self { address: addrs, bus } }
+
+    /// Selects the active register page on the chip at `address` by writing
+    /// the page number to the command register (`0xFD`).
+    ///
+    /// See the module documentation for why this is a separate bus frame.
+    async fn select_page(&mut self, address: u8, page: u8) -> Result<(), TransportError<B::Error>> {
+        self.bus.write(address, &[CONFIGURE_CMD_PAGE, page]).await.map_err(TransportError::I2c)
+    }
 }
 
 /// Errors that can occur in the I2C transport.
@@ -57,35 +79,27 @@ where
 
     #[inline]
     async fn read_reg(&mut self, driver_index: usize, page: u8, reg: u8) -> Result<u8, Self::Error> {
-        let address = match self.address.get(driver_index) {
-            Some(&addr) => addr,
-            None => return Err(TransportError::InvalidIndex),
+        let Some(&address) = self.address.get(driver_index) else {
+            return Err(TransportError::InvalidIndex);
         };
 
+        self.select_page(address, page).await?;
+
+        // Write the register pointer, then read one byte after a repeated
+        // START.
         let mut buf = [0_u8; 1];
+        self.bus.write_read(address, &[reg], &mut buf).await.map_err(TransportError::I2c)?;
 
-        // Page-select, register-pointer write, and read are one atomic Sr transaction.
-        match self
-            .bus
-            .transaction(address, &mut [
-                Operation::Write(&[CONFIGURE_CMD_PAGE, page]),
-                Operation::Write(&[reg]),
-                Operation::Read(&mut buf),
-            ])
-            .await
-        {
-            Ok(()) => {},
-            Err(error) => return Err(TransportError::I2c(error)),
-        }
-
-        match buf.first() {
-            Some(&val) => Ok(val),
-            None => Err(TransportError::InvalidIndex),
-        }
+        let [value] = buf;
+        Ok(value)
     }
 
     /// I2C chips are reset via the software shutdown register in
     /// [`crate::driver::Driver::init`]; no hardware pin toggle is needed here.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "reset is a hardware no-op on I2C; the trait method must stay async for the SPI implementation"
+    )]
     #[inline]
     async fn reset(&mut self) -> Result<(), Self::Error> { Ok(()) }
 
@@ -95,43 +109,24 @@ where
             return Err(TransportError::PayloadTooLarge);
         }
 
-        let address = match self.address.get(driver_index) {
-            Some(&addr) => addr,
-            None => return Err(TransportError::InvalidIndex),
+        let Some(&address) = self.address.get(driver_index) else {
+            return Err(TransportError::InvalidIndex);
         };
 
-        // Build the outgoing frame: [reg_addr, payload...] into a fixed buffer.
-        let mut buf = [0; PWM_REGISTER_COUNT.saturating_add(1)];
+        self.select_page(address, page).await?;
 
-        match buf.get_mut(0) {
-            Some(slot) => *slot = reg,
-            None => return Err(TransportError::InvalidIndex),
-        }
-
-        let payload_end = match data.len().checked_add(1) {
-            Some(end) => end,
-            None => return Err(TransportError::PayloadTooLarge),
+        // Build the outgoing frame [reg, payload...] in a fixed buffer.
+        let mut buf = [0_u8; PWM_REGISTER_COUNT.saturating_add(1)];
+        let frame_len = data.len().saturating_add(1);
+        let Some(frame) = buf.get_mut(..frame_len) else {
+            return Err(TransportError::PayloadTooLarge);
         };
-
-        match buf.get_mut(1..payload_end) {
-            Some(slot) => slot.copy_from_slice(data),
-            None => return Err(TransportError::PayloadTooLarge),
-        }
-
-        let out = match buf.get(..payload_end) {
-            Some(slice) => slice,
-            None => return Err(TransportError::PayloadTooLarge),
+        let Some((reg_slot, payload)) = frame.split_first_mut() else {
+            return Err(TransportError::PayloadTooLarge);
         };
+        *reg_slot = reg;
+        payload.copy_from_slice(data);
 
-        // Issue page-select and data write as one atomic Sr transaction so no
-        // other master or task can interleave between the two frames.
-        match self
-            .bus
-            .transaction(address, &mut [Operation::Write(&[CONFIGURE_CMD_PAGE, page]), Operation::Write(out)])
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) => Err(TransportError::I2c(error)),
-        }
+        self.bus.write(address, frame).await.map_err(TransportError::I2c)
     }
 }

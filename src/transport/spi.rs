@@ -76,34 +76,30 @@ where
 
     #[inline]
     async fn read_reg(&mut self, driver_index: usize, page: u8, reg: u8) -> Result<u8, Self::Error> {
-        let device = match self.devices.get_mut(driver_index) {
-            Some(dev) => dev,
-            None => return Err(TransportError::InvalidIndex),
+        let Some(device) = self.devices.get_mut(driver_index) else {
+            return Err(TransportError::InvalidIndex);
         };
 
         let tx = [READ_CMD | PATTERN_CMD | (page & 0x0F), reg, 0x00];
         let mut rx = [0_u8; 3];
 
         // CS is asserted for the full transaction and released on drop.
-        match device.transaction(&mut [Operation::Transfer(&mut rx, &tx)]).await {
-            Ok(()) => {},
-            Err(error) => return Err(TransportError::Spi(error)),
-        }
+        device.transaction(&mut [Operation::Transfer(&mut rx, &tx)]).await.map_err(TransportError::Spi)?;
 
-        rx.get(2).copied().map_or_else(|| Err(TransportError::InvalidIndex), Ok)
+        // The chip drives the response on the third byte of the transfer.
+        let [_, _, value] = rx;
+        Ok(value)
     }
 
     #[inline]
     async fn reset(&mut self) -> Result<(), Self::Error> {
         // Pull SDB low to enter hardware shutdown, then release.
-        match self.sdb.set_low() {
-            Ok(()) => {},
-            Err(_) => return Err(TransportError::Pin),
+        if self.sdb.set_low().is_err() {
+            return Err(TransportError::Pin);
         }
         Timer::after_micros(250).await;
-        match self.sdb.set_high() {
-            Ok(()) => {},
-            Err(_) => return Err(TransportError::Pin),
+        if self.sdb.set_high().is_err() {
+            return Err(TransportError::Pin);
         }
         // Datasheet requires ~500 µs before the first register access.
         Timer::after_micros(500).await;
@@ -116,41 +112,14 @@ where
             return Err(TransportError::PayloadTooLarge);
         }
 
-        let device = match self.devices.get_mut(driver_index) {
-            Some(dev) => dev,
-            None => return Err(TransportError::InvalidIndex),
+        let Some(device) = self.devices.get_mut(driver_index) else {
+            return Err(TransportError::InvalidIndex);
         };
 
-        let mut buf = [0_u8; PWM_REGISTER_COUNT.saturating_add(2)];
+        let header = [WRITE_CMD | PATTERN_CMD | (page & 0x0F), reg];
 
-        match buf.get_mut(0) {
-            Some(cmd) => *cmd = WRITE_CMD | PATTERN_CMD | (page & 0x0F),
-            None => return Err(TransportError::InvalidIndex),
-        }
-        match buf.get_mut(1) {
-            Some(reg_slot) => *reg_slot = reg,
-            None => return Err(TransportError::InvalidIndex),
-        }
-
-        let payload_end = match data.len().checked_add(2) {
-            Some(end) => end,
-            None => return Err(TransportError::PayloadTooLarge),
-        };
-
-        match buf.get_mut(2..payload_end) {
-            Some(slot) => slot.copy_from_slice(data),
-            None => return Err(TransportError::PayloadTooLarge),
-        }
-
-        let out = match buf.get(..payload_end) {
-            Some(slice) => slice,
-            None => return Err(TransportError::PayloadTooLarge),
-        };
-
-        // CS is asserted for the full transaction and released on drop.
-        match device.transaction(&mut [Operation::Write(out)]).await {
-            Ok(()) => Ok(()),
-            Err(error) => Err(TransportError::Spi(error)),
-        }
+        // CS stays asserted across both operations and is released on drop,
+        // so the chip sees a single continuous frame: header, then payload.
+        device.transaction(&mut [Operation::Write(&header), Operation::Write(data)]).await.map_err(TransportError::Spi)
     }
 }

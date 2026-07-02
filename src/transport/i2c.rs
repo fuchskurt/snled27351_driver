@@ -14,12 +14,18 @@
 //!    selected page per chip, as permitted by datasheet section 4.2.
 //! 2. The register write (or a write-read for register reads).
 //!
-//! The page select must be its own STOP-terminated frame: it cannot be
-//! combined with the following access inside one `transaction()`, because
-//! [`I2c::transaction`] merges
-//! adjacent write operations into a single frame — the chip would then see
-//! `[0xFD, page, reg, data...]` and auto-increment the payload into the
-//! wrong registers.
+//! The [`I2c::transaction`] contract merges adjacent write operations into
+//! a single frame (no STOP or repeated START between them). This cuts both
+//! ways:
+//!
+//! - The page select must be its own STOP-terminated frame: combined with the
+//!   following access inside one `transaction()`, the chip would see `[0xFD,
+//!   page, reg, data...]` and auto-increment the payload into the wrong
+//!   registers.
+//! - The data frame exploits the merge: the register byte and the payload are
+//!   two `Write` operations in one transaction, which the bus emits as the
+//!   single frame `[reg, data...]` without buffering the payload. This relies
+//!   on the HAL implementing the transaction contract correctly.
 //!
 //! Splitting into two frames is still race-free for this driver: it holds
 //! `&mut` access to the bus (or bus device) for the whole call, and traffic
@@ -31,7 +37,7 @@ use crate::{
 };
 use embassy_time::Timer;
 use embedded_hal::digital::OutputPin;
-use embedded_hal_async::i2c::I2c;
+use embedded_hal_async::i2c::{I2c, Operation};
 
 /// 7-bit device address when the ADDR/CS pin is connected to GND.
 pub const ADDRESS_GND: u8 = 0x74;
@@ -166,19 +172,11 @@ where
 
         let address = self.select_page(driver_index, page).await?;
 
-        // Build the outgoing frame [reg, payload...] in a fixed buffer.
-        let mut buf = [0_u8; PWM_REGISTER_COUNT.saturating_add(1)];
-        let frame_len = data.len().saturating_add(1);
-        let Some(frame) = buf.get_mut(..frame_len) else {
-            return Err(TransportError::PayloadTooLarge);
-        };
-        let Some((reg_slot, payload)) = frame.split_first_mut() else {
-            return Err(TransportError::PayloadTooLarge);
-        };
-        *reg_slot = reg;
-        payload.copy_from_slice(data);
-
-        self.bus.write(address, frame).await?;
+        // Send [reg, payload...] as one frame without buffering: the
+        // transaction contract merges adjacent write operations into a
+        // single frame (no repeated START between them) — the same merge
+        // rule that forces the page select above to be a separate frame.
+        self.bus.transaction(address, &mut [Operation::Write(&[reg]), Operation::Write(data)]).await?;
         Ok(())
     }
 }

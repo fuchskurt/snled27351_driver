@@ -72,7 +72,7 @@ pub struct Led {
     /// PWM register address for the blue channel.
     blue:   u8,
     /// Index of the driver chip controlling this LED.
-    driver: usize,
+    driver: u8,
     /// PWM register address for the green channel.
     green:  u8,
     /// PWM register address for the red channel.
@@ -91,7 +91,7 @@ impl Led {
     /// (e.g. the `addrs` slice for I2C or the `devices` array for SPI).
     #[inline]
     #[must_use]
-    pub const fn driver(self) -> usize { self.driver }
+    pub const fn driver(self) -> u8 { self.driver }
 
     /// Returns the PWM register address for the green channel.
     #[inline]
@@ -118,7 +118,7 @@ impl Led {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(driver: usize, red: u8, green: u8, blue: u8) -> Self { Self { blue, driver, green, red } }
+    pub const fn new(driver: u8, red: u8, green: u8, blue: u8) -> Self { Self { blue, driver, green, red } }
 
     /// Returns the PWM register address for the red channel.
     #[inline]
@@ -562,7 +562,7 @@ where
     pub fn stage_all_leds(&mut self, red: u8, green: u8, blue: u8) {
         let leds = self.leds;
         for &led in leds {
-            let Some(buf) = self.bufs.get_mut(led.driver) else { continue };
+            let Some(buf) = self.bufs.get_mut(usize::from(led.driver)) else { continue };
             buf.stage(led, red, green, blue);
         }
     }
@@ -574,7 +574,7 @@ where
     #[inline]
     pub fn stage_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
         let Some(&led) = self.leds.get(led_index) else { return };
-        let Some(buf) = self.bufs.get_mut(led.driver) else { return };
+        let Some(buf) = self.bufs.get_mut(usize::from(led.driver)) else { return };
         buf.stage(led, red, green, blue);
     }
 
